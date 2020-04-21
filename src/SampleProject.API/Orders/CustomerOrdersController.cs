@@ -4,11 +4,11 @@ using System.Net;
 using System.Threading.Tasks;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
-using SampleProject.API.Orders.ChangeCustomerOrder;
-using SampleProject.API.Orders.GetCustomerOrderDetails;
-using SampleProject.API.Orders.GetCustomerOrders;
-using SampleProject.API.Orders.PlaceCustomerOrder;
-using SampleProject.API.Orders.RemoveCustomerOrder;
+using SampleProject.Application.Orders.ChangeCustomerOrder;
+using SampleProject.Application.Orders.GetCustomerOrderDetails;
+using SampleProject.Application.Orders.GetCustomerOrders;
+using SampleProject.Application.Orders.PlaceCustomerOrder;
+using SampleProject.Application.Orders.RemoveCustomerOrder;
 
 namespace SampleProject.API.Orders
 {
@@ -66,7 +66,7 @@ namespace SampleProject.API.Orders
             [FromRoute]Guid customerId, 
             [FromBody]CustomerOrderRequest request)
         {
-           await _mediator.Send(new PlaceCustomerOrderCommand(customerId, request.Products));
+           await _mediator.Send(new PlaceCustomerOrderCommand(customerId, request.Products, request.Currency));
 
            return Created(string.Empty, null);
         }
@@ -85,7 +85,7 @@ namespace SampleProject.API.Orders
             [FromRoute]Guid orderId,
             [FromBody]CustomerOrderRequest request)
         {
-            await _mediator.Send(new ChangeCustomerOrderCommand(customerId, orderId, request.Products));
+            await _mediator.Send(new ChangeCustomerOrderCommand(customerId, orderId, request.Products, request.Currency));
 
             return Ok();
         }

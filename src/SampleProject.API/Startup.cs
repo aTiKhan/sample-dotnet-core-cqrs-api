@@ -1,33 +1,25 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Threading.Tasks;
-using Autofac;
-using Autofac.Builder;
-using Autofac.Extensions.DependencyInjection;
-using Autofac.Extras.CommonServiceLocator;
-using CommonServiceLocator;
 using Hellang.Middleware.ProblemDetails;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.UserSecrets;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using Quartz;
-using Quartz.Impl;
-using SampleProject.API.InternalCommands;
-using SampleProject.API.Modules;
-using SampleProject.API.Outbox;
+using Microsoft.Extensions.Hosting;
+using SampleProject.API.Configuration;
+using SampleProject.Application.Configuration.Validation;
 using SampleProject.API.SeedWork;
+using SampleProject.Application.Configuration.Emails;
 using SampleProject.Domain.SeedWork;
 using SampleProject.Infrastructure;
-using SampleProject.Infrastructure.Customers;
+using SampleProject.Infrastructure.Caching;
+using SampleProject.Infrastructure.Database;
 using SampleProject.Infrastructure.SeedWork;
 
 [assembly: UserSecretsId("54e8eb06-aaa1-4fff-9f05-3ced1cb623c2")]
@@ -38,10 +30,7 @@ namespace SampleProject.API
         private readonly IConfiguration _configuration;
         private const string OrdersConnectionString = "OrdersConnectionString";
 
-        private ISchedulerFactory _schedulerFactory;
-        private IScheduler _scheduler;
-
-        public Startup(IHostingEnvironment env)
+        public Startup(IWebHostEnvironment env)
         {
             this._configuration = new ConfigurationBuilder()
                 .AddJsonFile("appsettings.json")
@@ -53,32 +42,33 @@ namespace SampleProject.API
 
         public IServiceProvider ConfigureServices(IServiceCollection services)
         {
-            services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_2_2);
-
-            this.AddSwagger(services);
+            services.AddControllers();
             
-            services
-                .AddEntityFrameworkSqlServer()
-                
-                .AddDbContext<OrdersContext>(options =>
-                {
-                    options
-                        .ReplaceService<IValueConverterSelector, StronglyTypedIdValueConverterSelector>()
-                        
-                        .UseSqlServer(this._configuration[OrdersConnectionString]);
-                });
+            services.AddMemoryCache();
+
+            services.AddSwaggerDocumentation();
 
             services.AddProblemDetails(x =>
             {
                 x.Map<InvalidCommandException>(ex => new InvalidCommandProblemDetails(ex));
                 x.Map<BusinessRuleValidationException>(ex => new BusinessRuleValidationExceptionProblemDetails(ex));
             });
+            
+            var children = this._configuration.GetSection("Caching").GetChildren();
+            var cachingConfiguration = children.ToDictionary(child => child.Key, child => TimeSpan.Parse(child.Value));
 
-            return CreateAutofacServiceProvider(services);
+            var emailsSettings = _configuration.GetSection("EmailsSettings").Get<EmailsSettings>();
+            var serviceProvider = services.BuildServiceProvider();
+            var memoryCache = serviceProvider.GetService<IMemoryCache>();
+            return ApplicationStartup.Initialize(
+                services, 
+                this._configuration[OrdersConnectionString],
+                new MemoryCacheStore(memoryCache, cachingConfiguration),
+                null,
+                emailsSettings);
         }
 
-        public void Configure(IApplicationBuilder app, IHostingEnvironment env,
-            IApplicationLifetime lifetime, IServiceProvider serviceProvider)
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
             if (env.IsDevelopment())
             {
@@ -89,109 +79,11 @@ namespace SampleProject.API
                 app.UseProblemDetails();
             }
 
-            app.UseMvc();
+            app.UseRouting();
 
-            this.StartQuartz(serviceProvider);
+            app.UseEndpoints(endpoints => { endpoints.MapControllers(); });
 
-            ConfigureSwagger(app);
-        }
-
-        private IServiceProvider CreateAutofacServiceProvider(IServiceCollection services)
-        {
-            var container = new ContainerBuilder();
-
-            container.Populate(services);
-
-            container.RegisterModule(new InfrastructureModule(this._configuration[OrdersConnectionString]));
-            container.RegisterModule(new MediatorModule());
-            container.RegisterModule(new ForeignExchangeModule());
-            container.RegisterModule(new DomainModule());
-            container.RegisterModule(new EmailModule());
-
-            var children = this._configuration.GetSection("Caching").GetChildren();
-            Dictionary<string, TimeSpan> configuration = children.ToDictionary(child => child.Key, child => TimeSpan.Parse(child.Value));
-            container.RegisterModule(new CachingModule(configuration));
-
-            var buildContainer = container.Build();
-                         
-            ServiceLocator.SetLocatorProvider(() => new AutofacServiceLocator(buildContainer));
-
-            return new AutofacServiceProvider(buildContainer);
-        }
-
-        public void StartQuartz(IServiceProvider serviceProvider)
-        {
-            this._schedulerFactory = new StdSchedulerFactory();
-            this._scheduler = _schedulerFactory.GetScheduler().GetAwaiter().GetResult();
-
-            var container = new ContainerBuilder();
-            container.RegisterModule(new OutboxModule());
-            container.RegisterModule(new MediatorModule());
-            container.RegisterModule(new InfrastructureModule(this._configuration[OrdersConnectionString]));
-            container.RegisterModule(new EmailModule());
-
-            container.Register(c =>
-            {
-                var dbContextOptionsBuilder = new DbContextOptionsBuilder<OrdersContext>();
-                dbContextOptionsBuilder.UseSqlServer(this._configuration[OrdersConnectionString]);
-
-                dbContextOptionsBuilder
-                    .ReplaceService<IValueConverterSelector, StronglyTypedIdValueConverterSelector>();
-
-                return new OrdersContext(dbContextOptionsBuilder.Options);
-            }).AsSelf().InstancePerLifetimeScope();
-
-            _scheduler.JobFactory = new JobFactory(container.Build());
-
-            _scheduler.Start().GetAwaiter().GetResult();
-
-            var processOutboxJob = JobBuilder.Create<ProcessOutboxJob>().Build();
-            var trigger = 
-                TriggerBuilder
-                    .Create()
-                    .StartNow()
-                    .WithCronSchedule("0/15 * * ? * *")
-                    .Build();
-
-            _scheduler.ScheduleJob(processOutboxJob, trigger).GetAwaiter().GetResult(); 
-
-            var processInternalCommandsJob = JobBuilder.Create<ProcessInternalCommandsJob>().Build();
-            var triggerCommandsProcessing = 
-                TriggerBuilder
-                    .Create()
-                    .StartNow()
-                    .WithCronSchedule("0/15 * * ? * *")
-                    .Build();
-            _scheduler.ScheduleJob(processInternalCommandsJob, triggerCommandsProcessing).GetAwaiter().GetResult();           
-        }
-
-        private static void ConfigureSwagger(IApplicationBuilder app)
-        {
-            app.UseSwagger();
-
-            app.UseSwaggerUI(c =>
-            {
-                c.SwaggerEndpoint("/swagger/v1/swagger.json", "Sample CQRS API V1");
-            });
-        }
-
-        private void AddSwagger(IServiceCollection services)
-        {
-            services.AddSwaggerGen(options =>
-            {
-                options.DescribeAllEnumsAsStrings();
-                options.SwaggerDoc("v1", new Swashbuckle.AspNetCore.Swagger.Info
-                {
-                    Title = "Sample CQRS API",
-                    Version = "v1",
-                    Description = "Sample .NET Core REST API CQRS implementation with raw SQL and DDD using Clean Architecture.",
-                });
-
-                var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                var commentsFileName = Assembly.GetExecutingAssembly().GetName().Name + ".XML";
-                var commentsFile = Path.Combine(baseDirectory, commentsFileName);
-                options.IncludeXmlComments(commentsFile);
-            });
+            app.UseSwaggerDocumentation();
         }
     }
 }

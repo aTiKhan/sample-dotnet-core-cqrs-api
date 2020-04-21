@@ -10,7 +10,7 @@ Sample .NET Core REST API application implemented with basic [CQRS](https://docs
 
 ## Architecture [Clean Architecture](http://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html)
 
-![projects_dependencies](docs/projects_dependencies.png)
+![projects_dependencies](docs/clean_architecture.jpg)
 
 ## CQRS
 
@@ -53,8 +53,14 @@ Outbox Pattern implementation using [Quartz.NET](https://github.com/quartznet/qu
 
 [The Outbox Pattern](http://www.kamilgrzybek.com/design/the-outbox-pattern/)
 
-## How to run
+## How to run application
 1. Create empty database.
 2. Execute InitializeDatabase.sql script.
 2. Set connection string (in appsettings.json or by user secrets mechanism).
 3. Run!
+
+## How to run Integration Tests
+1. Create empty database.
+2. Execute InitializeDatabase.sql script.
+3. Set connection string using environment variable named `ASPNETCORE_SampleProject_IntegrationTests_ConnectionString`
+- Run tests from project [src/Tests/SampleProject.IntegrationTests](src/Tests/SampleProject.IntegrationTests)
