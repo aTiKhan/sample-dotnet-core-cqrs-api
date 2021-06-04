@@ -2,6 +2,7 @@
 using System.Threading;
 using System.Threading.Tasks;
 using MediatR;
+using SampleProject.Application.Configuration.Commands;
 using SampleProject.Application.Configuration.Data;
 using SampleProject.Application.Orders.PlaceCustomerOrder;
 using SampleProject.Domain.Customers;
@@ -11,7 +12,7 @@ using SampleProject.Domain.Products;
 
 namespace SampleProject.Application.Orders.ChangeCustomerOrder
 {
-    internal class ChangeCustomerOrderCommandHandler : ICommandHandler<ChangeCustomerOrderCommand,Unit>
+    internal sealed class ChangeCustomerOrderCommandHandler : ICommandHandler<ChangeCustomerOrderCommand,Unit>
     {
         private readonly ICustomerRepository _customerRepository;
 
@@ -19,7 +20,7 @@ namespace SampleProject.Application.Orders.ChangeCustomerOrder
 
         private readonly ISqlConnectionFactory _sqlConnectionFactory;
 
-        public ChangeCustomerOrderCommandHandler(
+        internal ChangeCustomerOrderCommandHandler(
             ICustomerRepository customerRepository,
             IForeignExchange foreignExchange, 
             ISqlConnectionFactory sqlConnectionFactory)
